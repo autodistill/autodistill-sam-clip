@@ -64,37 +64,37 @@ class SAMCLIP(DetectionBaseModel):
 
         labels = self.ontology.prompts()
 
+        nms_data = []
+
         if len(sam_result) == 0:
             return sv.Detections.empty()
 
         for mask in sam_result:
             mask_item = mask["segmentation"]
-            # cut out binary mask from image
 
             image = image_rgb.copy()
+
             # image[mask_item == 0] = 0
 
-            # padd bbox by 20%
-            mask["bbox"][0] = max(0, mask["bbox"][0] - int(mask["bbox"][2] * 0.2))
-            mask["bbox"][1] = max(0, mask["bbox"][1] - int(mask["bbox"][3] * 0.2))
-            mask["bbox"][2] = min(
-                image.shape[1], mask["bbox"][2] + int(mask["bbox"][2] * 0.2)
-            )
-            mask["bbox"][3] = min(
-                image.shape[0], mask["bbox"][3] + int(mask["bbox"][3] * 0.2)
-            )
-
-            # cut out bbox bbox
-            image = image[
-                mask["bbox"][1] : mask["bbox"][3], mask["bbox"][0] : mask["bbox"][2]
+            # transform box from xywh to xyxy
+            mask["bbox"] = [
+                mask["bbox"][0],
+                mask["bbox"][1],
+                mask["bbox"][0] + mask["bbox"][2],
+                mask["bbox"][1] + mask["bbox"][3],
             ]
 
-            # prepare for CLIP
+            # cut out bbox
+            image = image[
+                int(mask["bbox"][1]) : int(mask["bbox"][3]),
+                int(mask["bbox"][0]) : int(mask["bbox"][2]),
+            ]
 
             # fix ValueError: tile cannot extend outside image
             if image.shape[0] == 0 or image.shape[1] == 0:
                 continue
 
+            # show me the bbox
             image = Image.fromarray(image)
 
             image = self.clip_preprocess(image).unsqueeze(0).to(DEVICE)
@@ -113,16 +113,17 @@ class SAMCLIP(DetectionBaseModel):
 
                     text_features /= text_features.norm(dim=-1, keepdim=True)
                     # get cosine similarity between image and text features
+
                     cosine_sim = cosine_similarity(
                         image_features.cpu().numpy(), text_features.cpu().numpy()
                     )
 
                     cosime_sims.append(cosine_sim[0][0])
 
+                    print(cosine_sim[0][0])
+
             max_prob = None
             max_idx = None
-
-            print(cosime_sims)
 
             values, indices = torch.topk(torch.tensor(cosime_sims), 1)
 
@@ -138,23 +139,36 @@ class SAMCLIP(DetectionBaseModel):
                         class_id=np.array([max_idx]),
                     )
                 )
+                # (x_min, y_min, x_max, y_max, score, class)
+                nms_data.append(
+                    (
+                        mask["bbox"][0],
+                        mask["bbox"][1],
+                        mask["bbox"][2],
+                        mask["bbox"][3],
+                        max_prob,
+                        max_idx,
+                    )
+                )
+
+                annotator = sv.BoxAnnotator()
+
+                annotated_image = annotator.annotate(
+                    scene=image_bgr,
+                    detections=sv.Detections(
+                        xyxy=np.array([mask["bbox"]]), class_id=np.array([1])
+                    ),
+                )
+
+                cv2.imshow("image", annotated_image)
+
+                cv2.waitKey(0)
+
+        nms = sv.non_max_suppression(np.array(nms_data), 0.5)
+
+        valid_detections = [valid_detections[i] for i in nms if i == True]
 
         return combine_detections(
             valid_detections, overwrite_class_ids=len(valid_detections) * [1]
         )
 
-
-model = SAMCLIP(ontology=CaptionOntology({"box": "box"}))
-
-detections = model.predict("./trash.jpg", confidence=0.2)
-
-# show predictions
-
-image_bgr = cv2.imread("./trash.jpg")
-
-mask_annotator = sv.MaskAnnotator()
-
-annotated_image = mask_annotator.annotate(scene=image_bgr, detections=detections)
-
-cv2.imshow("image", annotated_image)
-cv2.waitKey(0)
