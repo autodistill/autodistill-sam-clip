@@ -12,7 +12,7 @@ try:
 except:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "torch"])
 
-with open("./autodistill_grounded_sam/__init__.py", "r") as f:
+with open("./autodistill_sam_clip/__init__.py", "r") as f:
     content = f.read()
     # from https://www.py4u.net/discuss/139845
     version = re.search(r'__version__\s*=\s*[\'"]([^\'"]*)[\'"]', content).group(1)
