@@ -120,8 +120,6 @@ class SAMCLIP(DetectionBaseModel):
 
                     cosime_sims.append(cosine_sim[0][0])
 
-                    print(cosine_sim[0][0])
-
             max_prob = None
             max_idx = None
 
@@ -164,11 +162,10 @@ class SAMCLIP(DetectionBaseModel):
 
                 cv2.waitKey(0)
 
-        nms = sv.non_max_suppression(np.array(nms_data), 0.5)
+        # nms = sv.non_max_suppression(np.array(nms_data), 0.5)
 
-        valid_detections = [valid_detections[i] for i in nms if i == True]
+        # valid_detections = [valid_detections[i] for i in nms if i == True]
 
         return combine_detections(
             valid_detections, overwrite_class_ids=len(valid_detections) * [1]
         )
-
