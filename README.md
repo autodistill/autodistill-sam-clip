@@ -21,7 +21,7 @@ Read the [SAM-CLIP Autodistill documentation](https://autodistill.github.io/auto
 
 ## Installation
 
-To use the Grounded SAM base model, you will need to install the following dependency:
+To use the SAM-CLIP base model, you will need to install the following dependency:
 
 ```bash
 pip3 install autodistill-sam-clip
