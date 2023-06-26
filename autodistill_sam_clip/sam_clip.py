@@ -19,7 +19,7 @@ import supervision as sv
 from autodistill.detection import CaptionOntology, DetectionBaseModel
 from segment_anything import SamAutomaticMaskGenerator
 
-from helpers import combine_detections, load_SAM
+from .helpers import combine_detections, load_SAM
 
 HOME = os.path.expanduser("~")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -60,6 +60,15 @@ class SAMCLIP(DetectionBaseModel):
         # SAM Predictions
         sam_result = self.sam_predictor.generate(image_rgb)
 
+        # mask_annotator = sv.MaskAnnotator()
+
+        # annotated_image = mask_annotator.annotate(
+        #     scene=image_bgr, detections=sv.Detections.from_sam(sam_result)
+        # )
+
+        # cv2.imshow("image", annotated_image)
+        # cv2.waitKey(0)
+
         valid_detections = []
 
         labels = self.ontology.prompts()
@@ -68,6 +77,8 @@ class SAMCLIP(DetectionBaseModel):
 
         if len(sam_result) == 0:
             return sv.Detections.empty()
+
+        labels.append("background")
 
         for mask in sam_result:
             mask_item = mask["segmentation"]
@@ -106,19 +117,18 @@ class SAMCLIP(DetectionBaseModel):
 
                 image_features /= image_features.norm(dim=-1, keepdim=True)
 
-                for label in labels:
-                    text = self.tokenize([label]).to(DEVICE)
+                text = self.tokenize(labels)
 
-                    text_features = self.clip_model.encode_text(text)
+                text_features = self.clip_model.encode_text(text)
 
-                    text_features /= text_features.norm(dim=-1, keepdim=True)
-                    # get cosine similarity between image and text features
+                text_features /= text_features.norm(dim=-1, keepdim=True)
+                # get cosine similarity between image and text features
 
-                    cosine_sim = cosine_similarity(
-                        image_features.cpu().numpy(), text_features.cpu().numpy()
-                    )
+                similarity = (100.0 * image_features @ text_features.T).softmax(dim=-1)
 
-                    cosime_sims.append(cosine_sim[0][0])
+                print(similarity)
+
+                cosime_sims.append(similarity[0][0].item())
 
             max_prob = None
             max_idx = None
@@ -149,23 +159,17 @@ class SAMCLIP(DetectionBaseModel):
                     )
                 )
 
-                annotator = sv.BoxAnnotator()
+        final_detections = valid_detections
 
-                annotated_image = annotator.annotate(
-                    scene=image_bgr,
-                    detections=sv.Detections(
-                        xyxy=np.array([mask["bbox"]]), class_id=np.array([1])
-                    ),
-                )
+        nms = sv.non_max_suppression(np.array(nms_data), 0.5)
 
-                cv2.imshow("image", annotated_image)
+        final_detections = []
 
-                cv2.waitKey(0)
-
-        # nms = sv.non_max_suppression(np.array(nms_data), 0.5)
-
-        # valid_detections = [valid_detections[i] for i in nms if i == True]
+        # nms is list of bools
+        for idx, is_valid in enumerate(nms):
+            if is_valid:
+                final_detections.append(valid_detections[idx])
 
         return combine_detections(
-            valid_detections, overwrite_class_ids=len(valid_detections) * [1]
+            final_detections, overwrite_class_ids=[0] * len(final_detections)
         )
