@@ -42,7 +42,7 @@ class SAMCLIP(DetectionBaseModel):
                 f"cd {HOME}/.cache/autodistill/clip && pip install git+https://github.com/openai/CLIP.git"
             )
 
-        # add clip path to path
+        # add clip path to user path
         sys.path.insert(0, f"{HOME}/.cache/autodistill/clip/CLIP")
 
         import clip
@@ -57,17 +57,7 @@ class SAMCLIP(DetectionBaseModel):
         image_bgr = cv2.imread(input)
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 
-        # SAM Predictions
         sam_result = self.sam_predictor.generate(image_rgb)
-
-        # mask_annotator = sv.MaskAnnotator()
-
-        # annotated_image = mask_annotator.annotate(
-        #     scene=image_bgr, detections=sv.Detections.from_sam(sam_result)
-        # )
-
-        # cv2.imshow("image", annotated_image)
-        # cv2.waitKey(0)
 
         valid_detections = []
 
@@ -78,28 +68,20 @@ class SAMCLIP(DetectionBaseModel):
         if len(sam_result) == 0:
             return sv.Detections.empty()
 
-        labels.append("background")
+        if "background" not in [l.lower() for l in labels]:
+            labels.append("background")
 
         for mask in sam_result:
             mask_item = mask["segmentation"]
 
             image = image_rgb.copy()
 
-            # image[mask_item == 0] = 0
+            bbox = mask["bbox"]
 
-            # transform box from xywh to xyxy
-            mask["bbox"] = [
-                mask["bbox"][0],
-                mask["bbox"][1],
-                mask["bbox"][0] + mask["bbox"][2],
-                mask["bbox"][1] + mask["bbox"][3],
-            ]
+            xyxy = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
 
-            # cut out bbox
-            image = image[
-                int(mask["bbox"][1]) : int(mask["bbox"][3]),
-                int(mask["bbox"][0]) : int(mask["bbox"][2]),
-            ]
+            # cut out mask from image using numpy indexing
+            image[mask_item == 0] = 0
 
             # fix ValueError: tile cannot extend outside image
             if image.shape[0] == 0 or image.shape[1] == 0:
@@ -109,8 +91,6 @@ class SAMCLIP(DetectionBaseModel):
             image = Image.fromarray(image)
 
             image = self.clip_preprocess(image).unsqueeze(0).to(DEVICE)
-
-            cosime_sims = []
 
             with torch.no_grad():
                 image_features = self.clip_model.encode_image(image)
@@ -122,31 +102,29 @@ class SAMCLIP(DetectionBaseModel):
                 text_features = self.clip_model.encode_text(text)
 
                 text_features /= text_features.norm(dim=-1, keepdim=True)
-                # get cosine similarity between image and text features
 
                 similarity = (100.0 * image_features @ text_features.T).softmax(dim=-1)
 
-                print(similarity)
+                if similarity.shape[0] == 0:
+                    continue
 
-                cosime_sims.append(similarity[0][0].item())
+                max_prob, max_idx = similarity[0].max(dim=0)
 
-            max_prob = None
-            max_idx = None
+                if max_prob < confidence:
+                    continue
 
-            values, indices = torch.topk(torch.tensor(cosime_sims), 1)
+                if labels[max_idx] == "background":
+                    continue
 
-            max_prob = values[0].item()
-            max_idx = indices[0].item()
-
-            if max_prob > confidence:
                 valid_detections.append(
                     sv.Detections(
-                        xyxy=np.array([mask["bbox"]]),
+                        xyxy=np.array([xyxy]),
                         confidence=np.array([max_prob]),
                         mask=np.array([mask_item]),
                         class_id=np.array([max_idx]),
                     )
                 )
+
                 # (x_min, y_min, x_max, y_max, score, class)
                 nms_data.append(
                     (
@@ -159,17 +137,17 @@ class SAMCLIP(DetectionBaseModel):
                     )
                 )
 
-        final_detections = valid_detections
-
         nms = sv.non_max_suppression(np.array(nms_data), 0.5)
 
+        print(nms)
+
         final_detections = []
+        ids = []
 
         # nms is list of bools
         for idx, is_valid in enumerate(nms):
             if is_valid:
                 final_detections.append(valid_detections[idx])
+                ids.append(valid_detections[idx].class_id[0])
 
-        return combine_detections(
-            final_detections, overwrite_class_ids=[0] * len(final_detections)
-        )
+        return combine_detections(final_detections, overwrite_class_ids=ids)
