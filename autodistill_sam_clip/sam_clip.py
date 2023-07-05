@@ -23,7 +23,6 @@ from .helpers import combine_detections, load_SAM
 
 HOME = os.path.expanduser("~")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(DEVICE)
 
 @dataclass
 class SAMCLIP(DetectionBaseModel):
