@@ -23,13 +23,13 @@ from .helpers import combine_detections, load_SAM
 
 HOME = os.path.expanduser("~")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+print(DEVICE)
 
 @dataclass
 class SAMCLIP(DetectionBaseModel):
     ontology: CaptionOntology
     sam_predictor: SamAutomaticMaskGenerator
-
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     def __init__(self, ontology: CaptionOntology):
         self.ontology = ontology
         self.sam_predictor = load_SAM()
@@ -37,9 +37,12 @@ class SAMCLIP(DetectionBaseModel):
         if not os.path.exists(f"{HOME}/.cache/autodistill/clip"):
             os.makedirs(f"{HOME}/.cache/autodistill/clip")
 
-            os.system("pip install ftfy regex tqdm")
+            # os.system("pip install ftfy regex tqdm")
+            # os.system(
+            #     f"cd {HOME}/.cache/autodistill/clip && pip install git+https://github.com/openai/CLIP.git"
+            # )
             os.system(
-                f"cd {HOME}/.cache/autodistill/clip && pip install git+https://github.com/openai/CLIP.git"
+                f"cd {HOME}/.cache/autodistill/clip"
             )
 
         # add clip path to path
@@ -59,6 +62,7 @@ class SAMCLIP(DetectionBaseModel):
 
         # SAM Predictions
         sam_result = self.sam_predictor.generate(image_rgb)
+        print("sam result", len(sam_result))
 
         # mask_annotator = sv.MaskAnnotator()
 
@@ -72,6 +76,7 @@ class SAMCLIP(DetectionBaseModel):
         valid_detections = []
 
         labels = self.ontology.prompts()
+        print("labels", labels)
 
         nms_data = []
 
@@ -79,10 +84,10 @@ class SAMCLIP(DetectionBaseModel):
             return sv.Detections.empty()
 
         labels.append("background")
-
+        count = 0
         for mask in sam_result:
             mask_item = mask["segmentation"]
-
+            count += 1
             image = image_rgb.copy()
 
             # image[mask_item == 0] = 0
@@ -106,29 +111,30 @@ class SAMCLIP(DetectionBaseModel):
                 continue
 
             # show me the bbox
-            image = Image.fromarray(image)
-
+            image = Image.fromarray(image, 'RGB')
+            image.save(f'{count}_img.png')
             image = self.clip_preprocess(image).unsqueeze(0).to(DEVICE)
 
             cosime_sims = []
 
             with torch.no_grad():
-                image_features = self.clip_model.encode_image(image)
-
+                image_features = self.clip_model.encode_image(image).to(DEVICE)
                 image_features /= image_features.norm(dim=-1, keepdim=True)
-
-                text = self.tokenize(labels)
-
-                text_features = self.clip_model.encode_text(text)
+                print("image_features", image_features.shape)
+                text = self.tokenize(labels).to(DEVICE)
+                print(" devcie b", DEVICE)
+                text_features = self.clip_model.encode_text(text).to(DEVICE)
+                text_features = text_features.to(DEVICE)
 
                 text_features /= text_features.norm(dim=-1, keepdim=True)
                 # get cosine similarity between image and text features
-
+                print("text_features", text_features.shape)
                 similarity = (100.0 * image_features @ text_features.T).softmax(dim=-1)
 
                 print(similarity)
 
                 cosime_sims.append(similarity[0][0].item())
+                print("after item sim", similarity[0][0].item())
 
             max_prob = None
             max_idx = None
@@ -137,7 +143,7 @@ class SAMCLIP(DetectionBaseModel):
 
             max_prob = values[0].item()
             max_idx = indices[0].item()
-
+            print("max+props", max_prob, max_idx)
             if max_prob > confidence:
                 valid_detections.append(
                     sv.Detections(
